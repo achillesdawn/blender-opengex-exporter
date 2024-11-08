@@ -134,14 +134,16 @@ class ExportVertex:
         self.hash = h
 
 
-class Buffer:
+class WriteBuffer:
     def __init__(self) -> None:
-        self.buffer = BytesIO(b"")
+        self.buffer = BytesIO()
 
     def write(self, data: bytes):
         self.buffer.write(data)
 
     def write_to_file(self, filepath: str):
+        self.buffer.seek(0)
+
         with open(filepath, "wb") as f:
             copyfileobj(self.buffer, f)
 
@@ -207,18 +209,6 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         description="Apply all transforms of all objects in the scene",
         default=False,
     )  # type: ignore
-
-    def __init__(self) -> None:
-        self.file = Buffer()
-
-        self.indentLevel = 0
-
-        self.nodeArray = {}
-        self.geometryArray = {}
-        self.lightArray = {}
-        self.cameraArray = {}
-        self.materialArray = {}
-        self.boneParentArray = {}
 
     def Write(self, text):
         self.file.write(text)
@@ -809,21 +799,22 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         return unifiedVertexArray
 
-    def ProcessBone(self, bone):
-        if (self.exportAllFlag) or (bone.select):
+    def process_bone(self, bone):
+        if self.exportAllFlag or bone.select:
             self.nodeArray[bone] = {
                 "nodeType": NODETYPE_BONE,
                 "structName": bytes("node" + str(len(self.nodeArray) + 1), "UTF-8"),
             }
 
-        for subnode in bone.children:
-            self.ProcessBone(subnode)
+        for child in bone.children:
+            self.process_bone(child)
 
     def process_node(self, node):
-        if (self.exportAllFlag) or (node.select_get()):
-            type = OpenGexExporter.GetNodeType(node)
+        if self.exportAllFlag or node.select_get():
+            node_type = OpenGexExporter.GetNodeType(node)
+
             self.nodeArray[node] = {
-                "nodeType": type,
+                "nodeType": node_type,
                 "structName": bytes("node" + str(len(self.nodeArray) + 1), "UTF-8"),
             }
 
@@ -839,22 +830,22 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                 if skeleton:
                     for bone in skeleton.bones:
                         if not bone.parent:
-                            self.ProcessBone(bone)
+                            self.process_bone(bone)
 
-        for subnode in node.children:
-            self.process_node(subnode)
+        for child in node.children:
+            self.process_node(child)
 
     def process_skinned_meshes(self):
-        for nodeRef in self.nodeArray.items():
-            if nodeRef[1]["nodeType"] == NODETYPE_GEO:
-                armature = nodeRef[0].find_armature()
+        for node_ref in self.nodeArray.items():
+            if node_ref[1]["nodeType"] == NODETYPE_GEO:
+                armature = node_ref[0].find_armature()
                 if armature:
                     for bone in armature.data.bones:
-                        boneRef = self.FindNode(bone.name)
-                        if boneRef:
+                        bone_ref = self.FindNode(bone.name)
+                        if bone_ref:
                             # If a node is used as a bone, then we force its type to be a bone.
 
-                            boneRef[1]["nodeType"] = NODETYPE_BONE
+                            bone_ref[1]["nodeType"] = NODETYPE_BONE
 
     @staticmethod
     def ClassifyAnimationCurve(fcurve):
@@ -1783,25 +1774,29 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         return node.to_mesh()
 
-    def ExportBoneTransform(self, armature, bone, scene):
+    def export_bone_transform(self, armature: bpy.types.Object, bone, scene):
         curveArray = self.CollectBoneAnimation(armature, bone.name)
         animation = (len(curveArray) != 0) or (self.sampleAnimationFlag)
 
         transform = bone.matrix_local.copy()
         parentBone = bone.parent
-        if (parentBone) and (
-            math.fabs(parentBone.matrix_local.determinant()) > EPSILON
-        ):
+
+        if parentBone and math.fabs(parentBone.matrix_local.determinant()) > EPSILON:
             transform = parentBone.matrix_local.inverted() @ transform
 
         poseBone = armature.pose.bones.get(bone.name)
+
         if poseBone:
+            print(poseBone)
             transform = poseBone.matrix.copy()
             parentPoseBone = poseBone.parent
             if (parentPoseBone) and (
                 math.fabs(parentPoseBone.matrix.determinant()) > EPSILON
             ):
                 transform = parentPoseBone.matrix.inverted() @ transform
+
+        # transform bone matrix to include parent object tranforms
+        # transform = armature.matrix_world @ transform
 
         self.IndentWrite(b"Transform")
 
@@ -1819,7 +1814,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         self.indentLevel -= 1
         self.IndentWrite(b"}\n")
 
-        if (animation) and (poseBone):
+        if animation and poseBone:
             self.ExportBoneSampledAnimation(poseBone, scene)
 
     def ExportMaterialRef(self, material, index):
@@ -1923,11 +1918,12 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             self.indentLevel -= 1
             self.IndentWrite(b"}\n")
 
-    def ExportBone(self, armature, bone, scene):
-        nodeRef = self.nodeArray.get(bone)
-        if nodeRef:
-            self.IndentWrite(structIdentifier[nodeRef["nodeType"]], 0, True)
-            self.Write(nodeRef["structName"])
+    def export_bone(self, armature, bone, scene):
+        node_ref = self.nodeArray.get(bone)
+
+        if node_ref:
+            self.IndentWrite(structIdentifier[node_ref["nodeType"]], 0, True)
+            self.Write(node_ref["structName"])
 
             self.IndentWrite(b"{\n", 0, True)
             self.indentLevel += 1
@@ -1938,10 +1934,10 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                 self.Write(bytes(name, "UTF-8"))
                 self.Write(b'"}}\n\n')
 
-            self.ExportBoneTransform(armature, bone, scene)
+            self.export_bone_transform(armature, bone, scene)
 
         for subnode in bone.children:
-            self.ExportBone(armature, subnode, scene)
+            self.export_bone(armature, subnode, scene)
 
         # Export any ordinary nodes that are parented to this bone.
 
@@ -1954,7 +1950,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             for subnode in boneSubnodeArray:
                 self.export_node(subnode, scene, poseBone)
 
-        if nodeRef:
+        if node_ref:
             self.indentLevel -= 1
             self.IndentWrite(b"}\n")
 
@@ -1965,11 +1961,11 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         nodeRef = self.nodeArray.get(node)
         if nodeRef:
-            type = nodeRef["nodeType"]
-            self.IndentWrite(structIdentifier[type], 0, True)
+            node_type = nodeRef["nodeType"]
+            self.IndentWrite(structIdentifier[node_type], 0, True)
             self.Write(nodeRef["structName"])
 
-            if type == NODETYPE_GEO:
+            if node_type == NODETYPE_GEO:
                 if node.hide_render:
                     self.Write(b" (visible = false)")
 
@@ -1991,8 +1987,8 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
             object = node.data
 
-            if type == NODETYPE_GEO:
-                if not object in self.geometryArray:
+            if node_type == NODETYPE_GEO:
+                if object not in self.geometryArray:
                     # Attempt to sanitize name
                     geomName = object.name.replace(" ", "_")
                     geomName = geomName.replace(".", "_").lower()
@@ -2018,7 +2014,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
                 structFlag = True
 
-            elif type == NODETYPE_LIGHT:
+            elif node_type == NODETYPE_LIGHT:
                 if not object in self.lightArray:
                     self.lightArray[object] = {
                         "structName": bytes(
@@ -2034,7 +2030,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                 self.Write(b"}}\n")
                 structFlag = True
 
-            elif type == NODETYPE_CAMERA:
+            elif node_type == NODETYPE_CAMERA:
                 if not object in self.cameraArray:
                     self.cameraArray[object] = {
                         "structName": bytes(
@@ -2078,7 +2074,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                 if skeleton:
                     for bone in skeleton.bones:
                         if not bone.parent:
-                            self.ExportBone(node, bone, scene)
+                            self.export_bone(node, bone, scene)
 
         for subnode in node.children:
             if subnode.parent_type != "BONE":
@@ -2960,6 +2956,18 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         print(f"[ Status ] {ob.name} set to Active Object")
 
     def execute(self, context):
+        self.file = WriteBuffer()
+
+        self.indentLevel = 0
+
+        self.nodeArray = {}
+        self.geometryArray = {}
+        self.lightArray = {}
+        self.cameraArray = {}
+        self.materialArray = {}
+        self.boneParentArray = {}
+
+
         print("\nOpenGex export starting... %r" % self.filepath)  # type: ignore
         start_time = time.perf_counter()
 
