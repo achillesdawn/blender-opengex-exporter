@@ -930,6 +930,8 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             if action:
                 for fcurve in action.fcurves:
                     if fcurve.data_path.startswith(path):
+                        # if "location" in fcurve.data_path:
+                        #     action.fcurves.remove(fcurve)
                         curveArray.append(fcurve)
 
         return curveArray
@@ -1774,26 +1776,25 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         return node.to_mesh()
 
-    def export_bone_transform(self, armature: bpy.types.Object, bone, scene):
+    def export_bone_transform(self, armature: bpy.types.Object, bone: bpy.types.Bone, scene: bpy.types.Scene):
         curveArray = self.CollectBoneAnimation(armature, bone.name)
         animation = (len(curveArray) != 0) or (self.sampleAnimationFlag)
 
         transform = bone.matrix_local.copy()
         parentBone = bone.parent
 
-        if parentBone and math.fabs(parentBone.matrix_local.determinant()) > EPSILON:
-            transform = parentBone.matrix_local.inverted() @ transform
+        if parentBone:
+            transform = parentBone.matrix_local.inverted_safe() @ transform
 
-        poseBone = armature.pose.bones.get(bone.name)
+        pose_bone = armature.pose.bones.get(bone.name)
 
-        if poseBone:
-            print(poseBone)
-            transform = poseBone.matrix.copy()
-            parentPoseBone = poseBone.parent
-            if (parentPoseBone) and (
-                math.fabs(parentPoseBone.matrix.determinant()) > EPSILON
-            ):
-                transform = parentPoseBone.matrix.inverted() @ transform
+        if pose_bone:
+            print(pose_bone)
+            transform = pose_bone.matrix.copy()
+            pose_bone_parent = pose_bone.parent
+
+            if pose_bone_parent:
+                transform = pose_bone_parent.matrix.inverted_safe() @ transform
 
         # transform bone matrix to include parent object tranforms
         # transform = armature.matrix_world @ transform
@@ -1814,8 +1815,8 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         self.indentLevel -= 1
         self.indent_write(b"}\n")
 
-        if animation and poseBone:
-            self.ExportBoneSampledAnimation(poseBone, scene)
+        if animation and pose_bone:
+            self.ExportBoneSampledAnimation(pose_bone, scene)
 
     def ExportMaterialRef(self, material, index):
         if not material in self.materialArray:
@@ -1959,11 +1960,12 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         # object reference, material references (for geometries), and transform.
         # Subnodes are then exported recursively.
 
-        nodeRef = self.nodeArray.get(node)
-        if nodeRef:
-            node_type = nodeRef["nodeType"]
+        node_ref = self.nodeArray.get(node)
+
+        if node_ref:
+            node_type = node_ref["nodeType"]
             self.indent_write(structIdentifier[node_type], 0, True)
-            self.write(nodeRef["structName"])
+            self.write(node_ref["structName"])
 
             if node_type == NODETYPE_GEO:
                 if node.hide_render:
@@ -1988,6 +1990,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             object = node.data
 
             if node_type == NODETYPE_GEO:
+
+                print(node_ref)
+
                 if object not in self.geometryArray:
                     # Attempt to sanitize name
                     geomName = object.name.replace(" ", "_")
@@ -2080,7 +2085,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             if subnode.parent_type != "BONE":
                 self.export_node(subnode, scene)
 
-        if nodeRef:
+        if node_ref:
             self.indentLevel -= 1
             self.indent_write(b"}\n")
 
