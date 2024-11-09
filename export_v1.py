@@ -159,6 +159,55 @@ class OpenGexPreferences(bpy.types.AddonPreferences):
         col.prop(self, "texture_directory", text="Texture Directory")
 
 
+class MatrixApplicator:
+    armature: bpy.types.Object
+
+    def __init__(self, armature: bpy.types.Object) -> None:
+        self.armature = armature
+
+    def execute(self):
+        matrix_world = self.armature.matrix_world
+
+        _, _, scale = matrix_world.decompose()
+        scale_2d = scale.to_2d()
+
+        self.select_and_make_active(self.armature)
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+        action = (
+            self.armature.animation_data.action
+            if self.armature.animation_data
+            else None
+        )
+        if not action:
+            print("no actions found, finishing")
+            return
+
+        for fcurve in action.fcurves:
+            if not fcurve.data_path.startswith("pose.bones["):
+                continue
+
+            print(fcurve.data_path)
+
+            if "location" in fcurve.data_path:
+                for keyframe in fcurve.keyframe_points:
+                    print(f"{keyframe.co=} {scale=}")
+                    keyframe.co = scale_2d * keyframe.co
+
+    @staticmethod
+    def select_and_make_active(ob: bpy.types.Object):
+        for ob_to_deselect in bpy.data.objects:
+            if ob_to_deselect == ob:
+                continue
+            ob_to_deselect.select_set(False)
+
+        assert bpy.context
+        bpy.context.view_layer.objects.active = ob
+        ob.select_set(True)
+
+        print(f"[ Status ] {ob.name} set to Active Object")
+
+
 class OpenGexExporter(bpy.types.Operator, ExportHelper):
     """Export to OpenGEX format"""
 
@@ -1184,7 +1233,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                         # because it no longer works for blender 3.0+
 
                         # ***
-                        self.write_matrix_flat(parent.matrix.inverted() @ poseBone.matrix)
+                        self.write_matrix_flat(
+                            parent.matrix.inverted() @ poseBone.matrix
+                        )
                         # ***
                     else:
                         self.write_matrix_flat(poseBone.matrix)
@@ -1776,7 +1827,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         return node.to_mesh()
 
-    def export_bone_transform(self, armature: bpy.types.Object, bone: bpy.types.Bone, scene: bpy.types.Scene):
+    def export_bone_transform(
+        self, armature: bpy.types.Object, bone: bpy.types.Bone, scene: bpy.types.Scene
+    ):
         curveArray = self.CollectBoneAnimation(armature, bone.name)
         animation = (len(curveArray) != 0) or (self.sampleAnimationFlag)
 
@@ -1990,7 +2043,6 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             object = node.data
 
             if node_type == NODETYPE_GEO:
-
                 print(node_ref)
 
                 if object not in self.geometryArray:
@@ -2441,7 +2493,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
                 # Write the morph target position array.
 
-                self.indent_write(b'VertexArray (attrib = "position", morph = ', 0, True)
+                self.indent_write(
+                    b'VertexArray (attrib = "position", morph = ', 0, True
+                )
                 self.write_int(m)
                 self.write(b")\n")
                 self.indent_write(b"{\n")
@@ -2450,7 +2504,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                 self.indent_write(b"float[3]\t\t// ")
                 self.write_int(vertexCount)
                 self.indent_write(b"{\n", 0, True)
-                self.write_morph_position_array_3d(unifiedVertexArray, morphMesh.vertices)
+                self.write_morph_position_array_3d(
+                    unifiedVertexArray, morphMesh.vertices
+                )
                 self.indent_write(b"}\n")
 
                 self.indentLevel -= 1
@@ -2679,7 +2735,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
             if spotFlag:
                 # Export additional angular attenuation for spot lights.
 
-                self.indent_write(b'Atten (kind = "angle", curve = "linear")\n', 0, True)
+                self.indent_write(
+                    b'Atten (kind = "angle", curve = "linear")\n', 0, True
+                )
                 self.indent_write(b"{\n")
 
                 endAngle = object.spot_size * 0.5
@@ -2972,7 +3030,6 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         self.materialArray = {}
         self.boneParentArray = {}
 
-
         print("\nOpenGex export starting... %r" % self.filepath)  # type: ignore
         start_time = time.perf_counter()
 
@@ -2995,10 +3052,14 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         if self.option_apply_transforms:
             for ob in scene.objects:
-                self.select_and_make_active(ob)
+                if ob.type == "ARMATURE":
+                    t = MatrixApplicator(ob)
+                    t.execute()
+                else:
+                    self.select_and_make_active(ob)
 
-                # apply transforms
-                bpy.ops.object.transform_apply(location=True, scale=True, rotation=True)
+                    # apply transforms
+                    bpy.ops.object.transform_apply(location=True, scale=True, rotation=True)
 
         for object in scene.objects:
             if not object.parent:

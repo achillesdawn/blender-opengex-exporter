@@ -1,32 +1,65 @@
 import bpy
+from bpy.types import Armature
 from typing import cast
 
-assert bpy.context
-ob = bpy.context.active_object
-assert ob
 
-matrix_world = ob.matrix_world
+class TransformApplier:
+    armature: bpy.types.Object
 
-print(matrix_world)
+    def __init__(self) -> None:
+        assert bpy.context
 
-data = cast(bpy.types.Armature, ob.data)
+        ob: bpy.types.Object | None = None
+        for ob in bpy.data.objects:
+            if ob.type == "ARMATURE":
+                break
 
-# bone: bpy.types.Bone
-# for bone in data.bones:
-#     parent = bone.parent
-#     bone.matrix_local = matrix_world @ bone.matrix_local
+        assert ob
+        self.armature = ob
 
-for pose_bone in ob.pose.bones:
-    data = cast(bpy.types.Armature, ob.data)
+    def execute(self):
+        matrix_world = self.armature.matrix_world
 
-    bone = data.bones[pose_bone.name]
-    parent = bone.parent
+        _, _, scale = matrix_world.decompose()
+        scale_2d = scale.to_2d()
 
-    # if parent:
-    #     parent_local = parent.matrix_local.inverted_safe() @ bone.matrix_local
-    #     pose_bone.matrix_basis = matrix_world @ parent_local
+        self.select_and_make_active(self.armature)
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
-    # else:
-    pose_bone.matrix_basis = matrix_world @ bone.matrix_local
+        action = (
+            self.armature.animation_data.action
+            if self.armature.animation_data
+            else None
+        )
+        if not action:
+            print("no actions found, finishing")
+            return
 
-ob.matrix_world.identity()
+        for fcurve in action.fcurves:
+            
+            if not fcurve.data_path.startswith('pose.bones['):
+                continue
+
+            print(fcurve.data_path)
+
+            if "location" in fcurve.data_path:
+                for keyframe in fcurve.keyframe_points:
+                    print(f"{keyframe.co=} {scale=}")
+                    keyframe.co = scale_2d * keyframe.co
+
+    @staticmethod
+    def select_and_make_active(ob: bpy.types.Object):
+        for ob_to_deselect in bpy.data.objects:
+            if ob_to_deselect == ob:
+                continue
+            ob_to_deselect.select_set(False)
+
+        assert bpy.context
+        bpy.context.view_layer.objects.active = ob
+        ob.select_set(True)
+
+        print(f"[ Status ] {ob.name} set to Active Object")
+
+
+t = TransformApplier()
+t.execute()
