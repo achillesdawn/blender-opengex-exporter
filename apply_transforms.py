@@ -17,7 +17,7 @@ class TransformApplier:
         assert ob
         self.armature = ob
 
-    def execute(self):
+    def execute(self, all_actions: bool = False):
         matrix_world = self.armature.matrix_world
 
         _, _, scale = matrix_world.decompose()
@@ -26,26 +26,38 @@ class TransformApplier:
         self.select_and_make_active(self.armature)
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
-        action = (
-            self.armature.animation_data.action
-            if self.armature.animation_data
-            else None
-        )
-        if not action:
-            print("no actions found, finishing")
-            return
+        if all_actions:
+            for action in bpy.data.actions:
+                for fcurve in action.fcurves:
+                    if not fcurve.data_path.startswith("pose.bones["):
+                        continue
 
-        for fcurve in action.fcurves:
-            
-            if not fcurve.data_path.startswith('pose.bones['):
-                continue
+                    print(fcurve.data_path)
 
-            print(fcurve.data_path)
+                    if "location" in fcurve.data_path:
+                        for keyframe in fcurve.keyframe_points:
+                            print(f"{keyframe.co=} {scale=}")
+                            keyframe.co = scale_2d * keyframe.co
+        else:
+            action = (
+                self.armature.animation_data.action
+                if self.armature.animation_data
+                else None
+            )
+            if not action:
+                print("no actions found, finishing")
+                return
 
-            if "location" in fcurve.data_path:
-                for keyframe in fcurve.keyframe_points:
-                    print(f"{keyframe.co=} {scale=}")
-                    keyframe.co = scale_2d * keyframe.co
+            for fcurve in action.fcurves:
+                if not fcurve.data_path.startswith("pose.bones["):
+                    continue
+
+                print(fcurve.data_path)
+
+                if "location" in fcurve.data_path:
+                    for keyframe in fcurve.keyframe_points:
+                        print(f"{keyframe.co=} {scale=}")
+                        keyframe.co = scale_2d * keyframe.co
 
     @staticmethod
     def select_and_make_active(ob: bpy.types.Object):
@@ -62,4 +74,4 @@ class TransformApplier:
 
 
 t = TransformApplier()
-t.execute()
+t.execute(all_actions=True)
