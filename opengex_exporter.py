@@ -33,6 +33,7 @@ bl_info = {
 
 import bpy
 from bpy_extras.io_utils import ExportHelper
+from bpy.types import Image
 
 from mathutils import Matrix
 
@@ -40,9 +41,11 @@ import struct
 import math
 import os
 import time
+
 from io import BytesIO
 from shutil import copyfileobj
 from enum import Enum
+from pathlib import Path
 
 
 NODETYPE_NODE = 0
@@ -2827,8 +2830,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         return None
 
-    def ExportImageNodeTexture(self, image, attrib):
-        # This function exports a single texture from a material.
+    def export_image_node_texture(self, image: Image, attrib):
+        
+        filepath: str = self.filepath # type: ignore
 
         self.indent_write(b'Texture (attrib = "', 0, False)
         self.write(attrib)
@@ -2839,24 +2843,26 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         self.indent_write(b'string {"')
 
-        # ***
+        texture_path = Path(filepath).parent / "textures"
 
-        prefix = ""
+        if not texture_path.exists:
+            print("creating texture export dir", texture_path.as_posix())
+            texture_path.mkdir()
 
-        # Copy the image to the texture directory.
-        texture_dir = os.path.abspath(
-            bpy.path.abspath(
-                bpy.context.preferences.addons[__name__].preferences.texture_directory
-            )
-        )
+        image_name = Path(image.filepath).name
 
-        if os.path.isdir(texture_dir):
-            filename = os.path.basename(image.filepath)
-            dst = os.path.join(texture_dir, filename)
-            image.save(filepath=dst)
-            prefix = f"/{os.path.basename(texture_dir)}/"
+        image_path = texture_path / image_name
+
+        print(f"saving image {image_path.as_posix()}")
+
+        image.save(filepath=image_path.as_posix())
+
+        if self.export_materials:
+            prefix = "/Import/textures/"
+        else:
+            prefix = ""
+
         self.write_file_name(prefix + os.path.basename(image.filepath))
-        # ***
 
         self.write(b'"}\n')
 
@@ -2909,7 +2915,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
         if MaterialPropertyFlags.PropertyTexture in propertyFlags:
             textureNode = self.FindTextureInNodeTree(bsdf, blenderParamName)
             if textureNode:
-                self.ExportImageNodeTexture(textureNode, ogexParamName)
+                self.export_image_node_texture(textureNode, ogexParamName)
                 didWriteValue = True
 
         if didWriteValue:
@@ -2918,10 +2924,10 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
     def ExportNormalMap(self, bsdf):
         normalMap = self.FindNormalMapInNodeTree(bsdf, "Normal")
         if normalMap:
-            self.ExportImageNodeTexture(normalMap, b"normal")
+            self.export_image_node_texture(normalMap, b"normal")
             self.write(b"\n")
 
-    def ExportMaterials(self):
+    def export_materials(self):
         # This function exports all of the materials used in the scene.
         if not self.option_export_materials:
             return
@@ -3059,7 +3065,9 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                     self.select_and_make_active(ob)
 
                     # apply transforms
-                    bpy.ops.object.transform_apply(location=True, scale=True, rotation=True)
+                    bpy.ops.object.transform_apply(
+                        location=True, scale=True, rotation=True
+                    )
 
         for object in scene.objects:
             if not object.parent:
@@ -3072,7 +3080,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
                 self.export_node(object, scene)
 
         self.ExportObjects(scene)
-        self.ExportMaterials()
+        self.export_materials()
 
         if self.restoreFrame:
             scene.frame_set(originalFrame, originalSubframe)
