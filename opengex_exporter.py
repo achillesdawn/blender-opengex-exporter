@@ -154,12 +154,8 @@ class WriteBuffer:
 class OpenGexPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
-    texture_directory: bpy.props.StringProperty(subtype="DIR_PATH")  # type: ignore
-
     def draw(self, context):
-        layout = self.layout
-        col = layout.column(align=True)
-        col.prop(self, "texture_directory", text="Texture Directory")
+        _ = self.layout
 
 
 class MatrixApplicator:
@@ -2847,7 +2843,7 @@ class OpenGexExporter(bpy.types.Operator, ExportHelper):
 
         if not texture_path.exists:
             print("creating texture export dir", texture_path.as_posix())
-            texture_path.mkdir()
+            texture_path.mkdir(exist_ok=True)
 
         image_name = Path(image.filepath).name
 
